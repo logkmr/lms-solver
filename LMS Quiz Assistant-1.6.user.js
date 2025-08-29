@@ -122,10 +122,14 @@
             const letters = answerLetters[index] || [];
 
             question.answers.forEach(answer => {
-                // Сбрасываем предыдущее выделение
+                // Сбрасываем предыдущее выделение и удаляем метки
                 if (answer.answerElement) {
                     answer.answerElement.style.backgroundColor = '';
                     answer.answerElement.style.border = '';
+
+                    // Удаляем существующие метки
+                    const existingLabels = answer.answerElement.querySelectorAll('.correct-label');
+                    existingLabels.forEach(label => label.remove());
                 }
 
                 // Если это правильный ответ - подсвечиваем
@@ -135,6 +139,15 @@
                         answer.answerElement.style.border = '2px solid #28a745';
                         answer.answerElement.style.borderRadius = '5px';
                         answer.answerElement.style.padding = '5px';
+
+                        // Добавляем текст в зеленой рамке
+                        const correctLabel = document.createElement('div');
+                        correctLabel.textContent = 'ChatGPT считает этот ответ правильным';
+                        correctLabel.style.marginLeft = 'auto';
+                        correctLabel.style.padding = '2px 5px';
+                        correctLabel.style.color = 'green';
+                        correctLabel.classList.add('correct-label');
+                        answer.answerElement.appendChild(correctLabel);
                     }
 
                     // Автоматически выбираем ответ
@@ -172,6 +185,7 @@
                 messages: [{role: 'user', content: prompt}],
                 temperature: config.temperature
             }),
+            timeout: 15000,
             onload: function(response) {
                 try {
                     const data = JSON.parse(response.responseText);
@@ -188,6 +202,9 @@
             },
             onerror: function(error) {
                 callback(error, null);
+            },
+            ontimeout: function() {
+                callback(new Error('Ошибка с соединением, попробуйте снова'), null);
             }
         });
     }
@@ -231,32 +248,6 @@
     function hideLoadingIndicator() {
         const loader = document.getElementById('lms-chatgpt-loader');
         if (loader) loader.remove();
-    }
-
-    // Показываем уведомление о завершении
-    function showCompletionNotification() {
-        const notification = document.createElement('div');
-        notification.innerHTML = '✅ Ответы автоматически выбраны и подсвечены';
-        notification.style = `
-            position: fixed;
-            top: 20px;
-            right: 20px;
-            background: #28a745;
-            color: white;
-            padding: 15px;
-            border-radius: 5px;
-            z-index: 10000;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-        `;
-
-        document.body.appendChild(notification);
-
-        // Автоматически скрываем через 5 секунд
-        setTimeout(() => {
-            notification.style.opacity = '0';
-            notification.style.transition = 'opacity 0.5s';
-            setTimeout(() => notification.remove(), 500);
-        }, 5000);
     }
 
     // Добавляем кнопку для запроса к ChatGPT
@@ -306,7 +297,6 @@
                 // Парсим ответ и автоматически выбираем ответы
                 const answerLetters = parseAIResponse(response);
                 highlightAndSelectAnswers(questionData, [answerLetters]); // Передаем как массив для совместимости
-                showCompletionNotification();
             });
         });
 
