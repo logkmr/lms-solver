@@ -214,7 +214,7 @@
                 align-items: center;
             ">
                 <div style="width: 50px; height: 50px; border: 5px solid #f3f3f3; border-top: 5px solid #3498db; border-radius: 50%; animation: spin 1s linear infinite;"></div>
-                <p style="margin-top: 15px;">Анализируем вопросы...</p>
+                <p style="margin-top: 15px;">Нейросеть думает над ответом...</p>
             </div>
             <style>
                 @keyframes spin {
@@ -266,13 +266,13 @@
 
         const button = document.createElement('button');
         button.id = buttonId;
-        button.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle; margin-right: 5px;"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg> Автозаполнить ответы';
+        button.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle; margin-right: 5px;"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg> Спросить ChatGPT';
 
         Object.assign(button.style, {
             position: 'fixed',
             bottom: '20px',
             right: '20px',
-            zIndex: '999',
+            zIndex: '999999999',
             padding: '10px 15px',
             backgroundColor: '#10a37f',
             color: 'white',
@@ -316,7 +316,7 @@
     // Инициализация
     function init() {
         if (isQuizAttemptPage()) {
-            setTimeout(addChatGPTButton, 1000);
+            setTimeout(addChatGPTButton, 100);
         }
     }
 
