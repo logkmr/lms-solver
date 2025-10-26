@@ -7,7 +7,7 @@
 // @match        https://lms.mitu.msk.ru/mod/quiz/attempt.php*
 // @icon         data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==
 // @grant        GM_xmlhttpRequest
-// @connect      key.wenwen-ai.com
+// @connect      api.aitunnel.ru
 // @require      https://cdn.jsdelivr.net/npm/marked@4.0.0/marked.min.js
 // @run-at       document-end
 // ==/UserScript==
@@ -17,9 +17,9 @@
 
     // Конфигурация
 const config = {
-    apiKey: '',
-    baseUrl: 'https://key.wenwen-ai.com/v1',
-    model: 'gemini-2.5-flash',
+    apiKey: 'sk-aitunnel-...',
+    baseUrl: 'https://api.aitunnel.ru/v1/',
+    model: 'gemini-2.5-flash-lite',
     temperature: 0.7,
     maxRetries: 2, // Максимальное количество попыток
     timeout: 15000 // Таймаут 10 секунд для каждого запроса
