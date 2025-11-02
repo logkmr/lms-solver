@@ -32,15 +32,18 @@
     // Загружаем конфигурацию из хранилища
     function loadConfig() {
         const savedConfig = GM_getValue('lms_assistant_config');
+        console.log('Загружены настройки из хранилища:', savedConfig);
         return savedConfig ? { ...defaultConfig, ...savedConfig } : defaultConfig;
     }
 
     // Сохраняем конфигурацию
     function saveConfig(config) {
+        console.log('Сохраняем настройки:', config);
         GM_setValue('lms_assistant_config', config);
     }
 
     let config = loadConfig();
+    console.log('Текущий конфиг:', config);
 
     // Кэш для хранения загруженного контекста
     let contextCache = null;
@@ -477,12 +480,19 @@
 
     // Создаем модальное окно настроек
     function createSettingsModal() {
+        // Перезагружаем конфиг перед открытием модального окна
+        config = loadConfig();
+
         const modalId = 'lms-assistant-settings-modal';
         const existingModal = document.getElementById(modalId);
         if (existingModal) {
             existingModal.style.display = 'flex';
             return;
         }
+
+        // Проверяем, есть ли сохраненная модель в списке предустановленных
+        const isModelInList = ['gemini-2.5-flash-lite', 'gpt-4.1-nano', 'deepseek-v3.2-exp'].includes(config.model);
+        const selectedModel = isModelInList ? config.model : 'custom';
 
         const modalHtml = `
             <div id="${modalId}" style="
@@ -521,13 +531,12 @@
                     <div style="margin-bottom: 15px;">
                         <label style="display: block; margin-bottom: 5px; font-weight: bold;">Модель:</label>
                         <select id="model-select" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
-                            <option value="gemini-2.5-flash-lite" ${config.model === 'gemini-2.5-flash-lite' ? 'selected' : ''}>Gemini 2.5 Flash Lite</option>
-                            <option value="gpt-3.5-turbo" ${config.model === 'gpt-3.5-turbo' ? 'selected' : ''}>GPT-3.5 Turbo</option>
-                            <option value="gpt-4" ${config.model === 'gpt-4' ? 'selected' : ''}>GPT-4</option>
-                            <option value="gpt-4o" ${config.model === 'gpt-4o' ? 'selected' : ''}>GPT-4o</option>
-                            <option value="custom">Другая модель...</option>
+                            <option value="gemini-2.5-flash-lite" ${selectedModel === 'gemini-2.5-flash-lite' ? 'selected' : ''}>Gemini 2.5 Flash Lite ≈0.01₽ (≈0.04₽)</option>
+                            <option value="gpt-4.1-nano" ${selectedModel === 'gpt-4.1-nano' ? 'selected' : ''}>GPT-4.1 nano ≈0.01₽ (≈0.01₽)</option>
+                            <option value="deepseek-v3.2-exp" ${selectedModel === 'deepseek-v3.2-exp' ? 'selected' : ''}>DeepSeek-v3.2-exp ≈0.01₽ (≈0.01₽)</option>
+                            <option value="custom" ${selectedModel === 'custom' ? 'selected' : ''}>Другая модель...</option>
                         </select>
-                        <input type="text" id="custom-model-input" placeholder="Введите название модели" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; margin-top: 5px; display: none;">
+                        <input type="text" id="custom-model-input" placeholder="Введите название модели" value="${!isModelInList ? config.model : ''}" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; margin-top: 5px; display: ${selectedModel === 'custom' ? 'block' : 'none'};">
                     </div>
 
                     <div style="margin-bottom: 15px;">
@@ -560,6 +569,9 @@
 
         modelSelect.addEventListener('change', function() {
             customModelInput.style.display = this.value === 'custom' ? 'block' : 'none';
+            if (this.value !== 'custom') {
+                customModelInput.value = '';
+            }
         });
 
         document.getElementById('save-settings').addEventListener('click', function() {
@@ -573,6 +585,12 @@
                 timeout: config.timeout
             };
 
+            // Проверяем корректность температуры
+            if (isNaN(newConfig.temperature) || newConfig.temperature < 0 || newConfig.temperature > 1) {
+                alert('Температура должна быть числом от 0 до 1');
+                return;
+            }
+
             config = newConfig;
             saveConfig(newConfig);
             modal.style.display = 'none';
@@ -585,6 +603,8 @@
                 saveConfig(defaultConfig);
                 modal.style.display = 'none';
                 alert('Настройки сброшены!');
+                // Перезагружаем страницу для применения настроек по умолчанию
+                setTimeout(() => location.reload(), 1000);
             }
         });
 
