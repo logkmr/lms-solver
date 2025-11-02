@@ -1,12 +1,14 @@
 // ==UserScript==
 // @name         LMS Quiz Assistant
 // @namespace    http://tampermonkey.net/
-// @version      1.7
+// @version      2.0
 // @description  Отправляет вопросы теста в ChatGPT и автоматически выбирает ответы
 // @author       You
 // @match        https://lms.mitu.msk.ru/mod/quiz/attempt.php*
 // @icon         data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==
 // @grant        GM_xmlhttpRequest
+// @grant        GM_setValue
+// @grant        GM_getValue
 // @connect      api.aitunnel.ru
 // @connect      lms.mitu.msk.ru
 // @require      https://cdn.jsdelivr.net/npm/marked@4.0.0/marked.min.js
@@ -16,15 +18,29 @@
 (function() {
     'use strict';
 
-    // Конфигурация
-    const config = {
+    // Конфигурация по умолчанию
+    const defaultConfig = {
         apiKey: 'sk-aitunnel-...',
         baseUrl: 'https://api.aitunnel.ru/v1/',
         model: 'gemini-2.5-flash-lite',
         temperature: 0.7,
         maxRetries: 2,
-        timeout: 15000
+        timeout: 15000,
+        useContext: true
     };
+
+    // Загружаем конфигурацию из хранилища
+    function loadConfig() {
+        const savedConfig = GM_getValue('lms_assistant_config');
+        return savedConfig ? { ...defaultConfig, ...savedConfig } : defaultConfig;
+    }
+
+    // Сохраняем конфигурацию
+    function saveConfig(config) {
+        GM_setValue('lms_assistant_config', config);
+    }
+
+    let config = loadConfig();
 
     // Кэш для хранения загруженного контекста
     let contextCache = null;
@@ -42,96 +58,74 @@
     }
 
     // Загружаем контекст из предыдущей активности
-    // Загружаем контекст из предыдущей активности
-function loadContextFromPrevActivity(callback) {
-    const prevActivityLink = getPrevActivityLink();
+    function loadContextFromPrevActivity(callback) {
+        if (!config.useContext) {
+            console.log('Работа с контекстом отключена в настройках');
+            callback(null);
+            return;
+        }
 
-    if (!prevActivityLink) {
-        console.log('Ссылка на предыдущую активность не найдена');
-        callback(null);
-        return;
-    }
+        const prevActivityLink = getPrevActivityLink();
 
-    // Если контекст уже загружен, используем кэш
-    if (contextCache) {
-        callback(contextCache);
-        return;
-    }
+        if (!prevActivityLink) {
+            console.log('Ссылка на предыдущую активность не найдена');
+            callback(null);
+            return;
+        }
 
-    console.log('Загружаем контекст из:', prevActivityLink);
+        // Если контекст уже загружен, используем кэш
+        if (contextCache) {
+            callback(contextCache);
+            return;
+        }
 
-    GM_xmlhttpRequest({
-        method: 'GET',
-        url: prevActivityLink,
-        onload: function(response) {
-            try {
-                // Создаем временный DOM для парсинга HTML
-                const parser = new DOMParser();
-                const doc = parser.parseFromString(response.responseText, 'text/html');
+        console.log('Загружаем контекст из:', prevActivityLink);
 
-                // Ищем основной контент страницы - разные варианты для разных типов страниц
-                let content = null;
+        GM_xmlhttpRequest({
+            method: 'GET',
+            url: prevActivityLink,
+            onload: function(response) {
+                try {
+                    // Создаем временный DOM для парсинга HTML
+                    const parser = new DOMParser();
+                    const doc = parser.parseFromString(response.responseText, 'text/html');
 
-                // Для страниц лекций (Page)
-                content = doc.querySelector('.main-content .no-overflow, .activity-inner, [role="main"] .no-overflow');
+                    // Ищем основной контент страницы
+                    const content = doc.querySelector('#region-main .activity-inner, .content, .no-overflow, [role="main"]') ||
+                                   doc.querySelector('body');
 
-                // Если не нашли, ищем по другим селекторам
-                if (!content) {
-                    content = doc.querySelector('.main-content, .activity-inner, [role="main"], .content');
-                }
+                    let contextText = '';
+                    if (content) {
+                        // Извлекаем текстовый контент, убираем лишние пробелы
+                        contextText = content.textContent
+                            .replace(/\s+/g, ' ')
+                            .trim()
+                            .substring(0, 10000); // Ограничиваем длину для избежания переполнения
+                    }
 
-                // Если все еще не нашли, используем body как запасной вариант
-                if (!content) {
-                    content = doc.querySelector('body');
-                }
-
-                let contextText = '';
-                if (content) {
-                    // Извлекаем текстовый контент, убираем лишние пробелы и HTML теги
-                    contextText = content.textContent
-                        .replace(/<[^>]*>/g, ' ') // Убираем HTML теги
-                        .replace(/\s+/g, ' ') // Заменяем множественные пробелы на один
-                        .trim()
-                        .substring(0, 8000); // Ограничиваем длину для избежания переполнения
-
-                    // Убираем лишний текст (навигацию, заголовки и т.д.)
-                    contextText = contextText
-                        .replace(/Перейти на\.\.\./g, '')
-                        .replace(/Личный кабинет/g, '')
-                        .replace(/Курсы/g, '')
-                        .replace(/Главная страница курса/g, '')
-                        .replace(/Найти/g, '')
-                        .replace(/Расписание вебинаров/g, '')
-                        .replace(/Личные файлы/g, '')
-                        .replace(/\s+/g, ' ')
-                        .trim();
-                }
-
-                if (contextText.length > 100) { // Минимальная длина контекста
-                    contextCache = contextText;
-                    console.log('Контекст успешно загружен, длина:', contextText.length);
-                    console.log('Первые 500 символов контекста:', contextText.substring(0, 500));
-                    callback(contextText);
-                } else {
-                    console.log('Не удалось извлечь контекст из страницы. Длина текста:', contextText.length);
-                    console.log('URL страницы:', prevActivityLink);
+                    if (contextText.length > 0) {
+                        contextCache = contextText;
+                        console.log('Контекст успешно загружен, длина:', contextText.length);
+                        callback(contextText);
+                    } else {
+                        console.log('Не удалось извлечь контекст из страницы');
+                        callback(null);
+                    }
+                } catch (error) {
+                    console.error('Ошибка при парсинге контекста:', error);
                     callback(null);
                 }
-            } catch (error) {
-                console.error('Ошибка при парсинге контекста:', error);
+            },
+            onerror: function(error) {
+                console.error('Ошибка при загрузке контекста:', error);
+                callback(null);
+            },
+            ontimeout: function() {
+                console.error('Таймаут при загрузке контекста');
                 callback(null);
             }
-        },
-        onerror: function(error) {
-            console.error('Ошибка при загрузке контекста:', error);
-            callback(null);
-        },
-        ontimeout: function() {
-            console.error('Таймаут при загрузке контекста');
-            callback(null);
-        }
-    });
-}
+        });
+    }
 
     function extractQuestionData() {
         const questionData = [];
@@ -190,7 +184,7 @@ function loadContextFromPrevActivity(callback) {
         let prompt = `Проанализируй вопрос теста и предложи правильный ответ. `;
 
         // Добавляем контекст если он есть
-        if (context) {
+        if (context && config.useContext) {
             prompt += `У тебя есть следующий контекст из учебного материала:\n\n${context}\n\n`;
             prompt += `Используй этот контекст для более точного определения правильного ответа. `;
         }
@@ -472,15 +466,141 @@ function loadContextFromPrevActivity(callback) {
                 const answerLetters = parseAIResponse(response);
                 highlightAndSelectAnswers(questionData, [answerLetters]);
 
-                if (context) {
+                if (context && config.useContext) {
                     console.log('Запрос выполнен с использованием учебного контекста');
+                } else {
+                    console.log('Запрос выполнен без учебного контекста');
                 }
             });
         });
     }
 
-    // Добавляем кнопки для запроса к ChatGPT и yandex поиска
-    function addChatGPTButton() {
+    // Создаем модальное окно настроек
+    function createSettingsModal() {
+        const modalId = 'lms-assistant-settings-modal';
+        const existingModal = document.getElementById(modalId);
+        if (existingModal) {
+            existingModal.style.display = 'flex';
+            return;
+        }
+
+        const modalHtml = `
+            <div id="${modalId}" style="
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                background: rgba(0,0,0,0.5);
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                z-index: 10000;
+            ">
+                <div style="
+                    background: white;
+                    padding: 20px;
+                    border-radius: 10px;
+                    width: 90%;
+                    max-width: 500px;
+                    max-height: 80vh;
+                    overflow-y: auto;
+                ">
+                    <h3 style="margin-top: 0; margin-bottom: 20px;">Настройки LMS Assistant</h3>
+
+                    <div style="margin-bottom: 15px;">
+                        <label style="display: block; margin-bottom: 5px; font-weight: bold;">API Key:</label>
+                        <input type="password" id="api-key-input" value="${config.apiKey}" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                    </div>
+
+                    <div style="margin-bottom: 15px;">
+                        <label style="display: block; margin-bottom: 5px; font-weight: bold;">API Base URL:</label>
+                        <input type="text" id="api-url-input" value="${config.baseUrl}" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                    </div>
+
+                    <div style="margin-bottom: 15px;">
+                        <label style="display: block; margin-bottom: 5px; font-weight: bold;">Модель:</label>
+                        <select id="model-select" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                            <option value="gemini-2.5-flash-lite" ${config.model === 'gemini-2.5-flash-lite' ? 'selected' : ''}>Gemini 2.5 Flash Lite</option>
+                            <option value="gpt-3.5-turbo" ${config.model === 'gpt-3.5-turbo' ? 'selected' : ''}>GPT-3.5 Turbo</option>
+                            <option value="gpt-4" ${config.model === 'gpt-4' ? 'selected' : ''}>GPT-4</option>
+                            <option value="gpt-4o" ${config.model === 'gpt-4o' ? 'selected' : ''}>GPT-4o</option>
+                            <option value="custom">Другая модель...</option>
+                        </select>
+                        <input type="text" id="custom-model-input" placeholder="Введите название модели" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; margin-top: 5px; display: none;">
+                    </div>
+
+                    <div style="margin-bottom: 15px;">
+                        <label style="display: block; margin-bottom: 5px; font-weight: bold;">Температура (0-1):</label>
+                        <input type="number" id="temperature-input" value="${config.temperature}" min="0" max="1" step="0.1" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                    </div>
+
+                    <div style="margin-bottom: 20px;">
+                        <label style="display: flex; align-items: center; cursor: pointer;">
+                            <input type="checkbox" id="use-context-checkbox" ${config.useContext ? 'checked' : ''} style="margin-right: 8px;">
+                            Использовать контекст из предыдущих лекций
+                        </label>
+                    </div>
+
+                    <div style="display: flex; justify-content: space-between;">
+                        <button id="save-settings" style="padding: 10px 20px; background: #28a745; color: white; border: none; border-radius: 5px; cursor: pointer;">Сохранить</button>
+                        <button id="reset-settings" style="padding: 10px 20px; background: #ffc107; color: black; border: none; border-radius: 5px; cursor: pointer;">Сбросить</button>
+                        <button id="close-settings" style="padding: 10px 20px; background: #6c757d; color: white; border: none; border-radius: 5px; cursor: pointer;">Закрыть</button>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        document.body.insertAdjacentHTML('beforeend', modalHtml);
+
+        // Обработчики для модального окна
+        const modal = document.getElementById(modalId);
+        const modelSelect = document.getElementById('model-select');
+        const customModelInput = document.getElementById('custom-model-input');
+
+        modelSelect.addEventListener('change', function() {
+            customModelInput.style.display = this.value === 'custom' ? 'block' : 'none';
+        });
+
+        document.getElementById('save-settings').addEventListener('click', function() {
+            const newConfig = {
+                apiKey: document.getElementById('api-key-input').value,
+                baseUrl: document.getElementById('api-url-input').value,
+                model: modelSelect.value === 'custom' ? customModelInput.value : modelSelect.value,
+                temperature: parseFloat(document.getElementById('temperature-input').value),
+                useContext: document.getElementById('use-context-checkbox').checked,
+                maxRetries: config.maxRetries,
+                timeout: config.timeout
+            };
+
+            config = newConfig;
+            saveConfig(newConfig);
+            modal.style.display = 'none';
+            alert('Настройки сохранены!');
+        });
+
+        document.getElementById('reset-settings').addEventListener('click', function() {
+            if (confirm('Сбросить настройки к значениям по умолчанию?')) {
+                config = { ...defaultConfig };
+                saveConfig(defaultConfig);
+                modal.style.display = 'none';
+                alert('Настройки сброшены!');
+            }
+        });
+
+        document.getElementById('close-settings').addEventListener('click', function() {
+            modal.style.display = 'none';
+        });
+
+        modal.addEventListener('click', function(e) {
+            if (e.target === modal) {
+                modal.style.display = 'none';
+            }
+        });
+    }
+
+    // Добавляем кнопки для запроса к ChatGPT, yandex поиска и настроек
+    function addControlButtons() {
         const buttonContainerId = 'ai-assistant-buttons';
         if (document.getElementById(buttonContainerId)) return;
 
@@ -494,6 +614,35 @@ function loadContextFromPrevActivity(callback) {
             display: flex;
             gap: 10px;
             align-items: center;
+        `;
+
+        // Кнопка настроек
+        const settingsButton = document.createElement('button');
+        settingsButton.innerHTML = `
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M13.1191 5.61336C13.0508 5.11856 12.6279 4.75 12.1285 4.75H11.8715C11.3721 4.75 10.9492 5.11856 10.8809 5.61336L10.7938 6.24511C10.7382 6.64815 10.4403 6.96897 10.0622 7.11922C10.006 7.14156 9.95021 7.16484 9.89497 7.18905C9.52217 7.3524 9.08438 7.3384 8.75876 7.09419L8.45119 6.86351C8.05307 6.56492 7.49597 6.60451 7.14408 6.9564L6.95641 7.14408C6.60452 7.49597 6.56492 8.05306 6.86351 8.45118L7.09419 8.75876C7.33841 9.08437 7.3524 9.52216 7.18905 9.89497C7.16484 9.95021 7.14156 10.006 7.11922 10.0622C6.96897 10.4403 6.64815 10.7382 6.24511 10.7938L5.61336 10.8809C5.11856 10.9492 4.75 11.372 4.75 11.8715V12.1285C4.75 12.6279 5.11856 13.0508 5.61336 13.1191L6.24511 13.2062C6.64815 13.2618 6.96897 13.5597 7.11922 13.9378C7.14156 13.994 7.16484 14.0498 7.18905 14.105C7.3524 14.4778 7.3384 14.9156 7.09419 15.2412L6.86351 15.5488C6.56492 15.9469 6.60451 16.504 6.9564 16.8559L7.14408 17.0436C7.49597 17.3955 8.05306 17.4351 8.45118 17.1365L8.75876 16.9058C9.08437 16.6616 9.52216 16.6476 9.89496 16.811C9.95021 16.8352 10.006 16.8584 10.0622 16.8808C10.4403 17.031 10.7382 17.3519 10.7938 17.7549L10.8809 18.3866C10.9492 18.8814 11.3721 19.25 11.8715 19.25H12.1285C12.6279 19.25 13.0508 18.8814 13.1191 18.3866L13.2062 17.7549C13.2618 17.3519 13.5597 17.031 13.9378 16.8808C13.994 16.8584 14.0498 16.8352 14.105 16.8109C14.4778 16.6476 14.9156 16.6616 15.2412 16.9058L15.5488 17.1365C15.9469 17.4351 16.504 17.3955 16.8559 17.0436L17.0436 16.8559C17.3955 16.504 17.4351 15.9469 17.1365 15.5488L16.9058 15.2412C16.6616 14.9156 16.6476 14.4778 16.811 14.105C16.8352 14.0498 16.8584 13.994 16.8808 13.9378C17.031 13.5597 17.3519 13.2618 17.7549 13.2062L18.3866 13.1191C18.8814 13.0508 19.25 12.6279 19.25 12.1285V11.8715C19.25 11.3721 18.8814 10.9492 18.3866 10.8809L17.7549 10.7938C17.3519 10.7382 17.031 10.4403 16.8808 10.0622C16.8584 10.006 16.8352 9.95021 16.8109 9.89496C16.6476 9.52216 16.6616 9.08437 16.9058 8.75875L17.1365 8.4512C17.4351 8.05308 17.3955 7.49599 17.0436 7.1441L16.8559 6.95642C16.504 6.60453 15.9469 6.56494 15.5488 6.86353L15.2412 7.09419C14.9156 7.33841 14.4778 7.3524 14.105 7.18905C14.0498 7.16484 13.994 7.14156 13.9378 7.11922C13.5597 6.96897 13.2618 6.64815 13.2062 6.24511L13.1191 5.61336Z"></path>
+                <path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M13.25 12C13.25 12.6904 12.6904 13.25 12 13.25C11.3096 13.25 10.75 12.6904 10.75 12C10.75 11.3096 11.3096 10.75 12 10.75C12.6904 10.75 13.25 11.3096 13.25 12Z"></path>
+            </svg>
+        `;
+
+        Object.assign(settingsButton.style, {
+            width: '50px',
+            height: '50px',
+            padding: '0',
+            backgroundColor: '#6c757d',
+            border: 'none',
+            borderRadius: '5px',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+        });
+
+        const settingsSvg = settingsButton.querySelector('svg');
+        settingsSvg.style.cssText = `
+            display: block;
+            margin: auto;
+            color: white;
         `;
 
         // Кнопка yandex
@@ -529,7 +678,7 @@ function loadContextFromPrevActivity(callback) {
         chatGPTButton.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle; margin-right: 5px;"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg> Спросить ChatGPT';
 
         Object.assign(chatGPTButton.style, {
-            padding: '10px 15px',
+            padding: '13px 15px',
             backgroundColor: '#10a37f',
             color: 'white',
             border: 'none',
@@ -542,6 +691,8 @@ function loadContextFromPrevActivity(callback) {
         });
 
         // Обработчики событий
+        settingsButton.addEventListener('click', createSettingsModal);
+
         yandexButton.addEventListener('click', () => {
             const questionData = extractQuestionData();
             if (questionData.length === 0) {
@@ -554,6 +705,7 @@ function loadContextFromPrevActivity(callback) {
         chatGPTButton.addEventListener('click', processWithContext);
 
         // Добавляем кнопки в контейнер
+        container.appendChild(settingsButton);
         container.appendChild(yandexButton);
         container.appendChild(chatGPTButton);
         document.body.appendChild(container);
@@ -562,7 +714,7 @@ function loadContextFromPrevActivity(callback) {
     // Инициализация
     function init() {
         if (isQuizAttemptPage()) {
-            setTimeout(addChatGPTButton, 100);
+            setTimeout(addControlButtons, 100);
         }
     }
 
